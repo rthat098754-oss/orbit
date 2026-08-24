@@ -1,13 +1,38 @@
 import { StyleSheet } from 'react-native';
 
+import { clearAppleIdLoginAsync } from '../commands/appleAccountAsync';
 import { View, Row, Text } from '../components';
 import Button from '../components/Button';
 import { DebugLogs } from '../components/DebugLogs';
 import NativeColorPalette from '../components/NativeColorPalette';
+import Alert from '../modules/Alert';
+import { DeviceEventEmitter } from '../modules/DeviceEventEmitter';
 import MenuBarModule from '../modules/MenuBarModule';
+import {
+  RESIGNED_APPS_CHECK_REQUEST_EVENT,
+  listResignedApps,
+  updateResignedApp,
+} from '../modules/ResignedApps';
 import { resetApolloStore, resetStorage } from '../modules/Storage';
 
 const DebugMenu = () => {
+  const clearAppleIdLogin = async () => {
+    try {
+      const appleId = await clearAppleIdLoginAsync();
+      Alert.alert(
+        'Apple ID login cleared',
+        appleId
+          ? `Signed out ${appleId}. The next resign will ask you to sign in again.`
+          : 'No Apple ID was signed in.'
+      );
+    } catch (error) {
+      Alert.alert(
+        'Could not clear Apple ID login',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  };
+
   return (
     <View flex="1" px="medium" pb="medium" padding="2" gap="1.5">
       <Row>
@@ -28,6 +53,33 @@ const DebugMenu = () => {
           color="primary"
           title="Clear Apollo Store"
           onPress={resetApolloStore}
+        />
+        <Button
+          style={styles.button}
+          color="primary"
+          title="Sign out of Apple ID"
+          onPress={clearAppleIdLogin}
+        />
+        <Button
+          style={styles.button}
+          color="primary"
+          title="Force renewal check"
+          onPress={() => DeviceEventEmitter.emit(RESIGNED_APPS_CHECK_REQUEST_EVENT)}
+        />
+        <Button
+          style={styles.button}
+          color="primary"
+          title="Expire resigned apps now"
+          onPress={() => {
+            const expired = new Date(Date.now() - 1000).toISOString();
+            for (const record of listResignedApps()) {
+              updateResignedApp(record.id, {
+                profileExpiresAt: expired,
+                lastAttemptAt: undefined,
+              });
+            }
+            Alert.alert('Resigned apps expired', 'Run a renewal check to watch them renew.');
+          }}
         />
       </Row>
       <NativeColorPalette />

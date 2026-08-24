@@ -12,6 +12,8 @@ import {
   WebBrowserResultType,
 } from '../../modules/web-authentication-session';
 import { withApolloProvider } from '../api/ApolloClient';
+import { clearAppleIdLoginAsync, loadAppleId } from '../commands/appleAccountAsync';
+import { cleanupResignedAppsAsync } from '../commands/cleanupResignedAppsAsync';
 import { getTrustedSourcesAsync } from '../commands/getTrustesSourcesAsync';
 import { setTrustedSourcesAsync } from '../commands/setTrustedSourcesAsync';
 import { Checkbox, View, Row, Text, Divider } from '../components';
@@ -22,7 +24,16 @@ import { Switch } from '../components/Switch';
 import TrustedSourcesInput from '../components/TrustedSourcesInput';
 import { useGetCurrentUserQuery } from '../generated/graphql';
 import Alert from '../modules/Alert';
+import { DeviceEventEmitter } from '../modules/DeviceEventEmitter';
 import MenuBarModule from '../modules/MenuBarModule';
+import {
+  RESIGNED_APPS_CHANGED_EVENT,
+  RESIGNED_APPS_RENEW_REQUEST_EVENT,
+  ResignedAppRecord,
+  listResignedApps,
+  removeResignedApp,
+  updateResignedApp,
+} from '../modules/ResignedApps';
 import {
   UserPreferences,
   getUserPreferences,
@@ -32,7 +43,8 @@ import {
   sessionSecretStorageKey,
   resetApolloStore,
 } from '../modules/Storage';
-import { getCurrentUserDisplayName } from '../utils/helpers';
+import { AppleAuthEmitter } from '../utils/appleAuthEvents';
+import { formatProfileExpiry, getCurrentUserDisplayName } from '../utils/helpers';
 import { addOpacity } from '../utils/theme';
 import { useCurrentTheme } from '../utils/useExpoTheme';
 
@@ -79,6 +91,79 @@ const Settings = () => {
   const [customSdkPathEnabled, setCustomSdkPathEnabled] = useState(
     Boolean(getUserPreferences().customSdkPath)
   );
+  const [appleAccountId, setAppleAccountId] = useState<string | null>(loadAppleId());
+  const [resignedApps, setResignedApps] = useState<ResignedAppRecord[]>(listResignedApps());
+
+  useEffect(() => {
+    // Cross-window: record writes and sign-ins can happen in the popover or the
+    // auth window; both broadcast through the main-process DeviceEventEmitter.
+    const recordsSub = DeviceEventEmitter.addListener(RESIGNED_APPS_CHANGED_EVENT, () => {
+      setResignedApps(listResignedApps());
+      setAppleAccountId(loadAppleId());
+    });
+    const authSub = AppleAuthEmitter.addListener('apple-id-auth:complete', () => {
+      setAppleAccountId(loadAppleId());
+    });
+    return () => {
+      recordsSub.remove();
+      authSub.remove();
+    };
+  }, []);
+
+  const signOutAppleId = async () => {
+    try {
+      const signedOut = await clearAppleIdLoginAsync();
+      setAppleAccountId(null);
+      Alert.alert(
+        'Apple ID signed out',
+        signedOut
+          ? `Signed out ${signedOut}. The next resign will ask you to sign in again.`
+          : 'No Apple ID was signed in.'
+      );
+    } catch (error) {
+      Alert.alert('Could not sign out', error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const renewRecordNow = (record: ResignedAppRecord) => {
+    // The renewal engine lives in the popover's Core (separate renderer on
+    // Electron); ask it to renew and bring the popover forward for progress.
+    DeviceEventEmitter.emit(RESIGNED_APPS_RENEW_REQUEST_EVENT, { recordId: record.id });
+    MenuBarModule.openPopover();
+  };
+
+  const removeRecord = (record: ResignedAppRecord) => {
+    Alert.alert(
+      `Remove ${record.appName}?`,
+      'Orbit deletes its stored copies and stops renewing it. The app stays on your ' +
+        'device until its profile expires.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'default',
+          onPress: () => {
+            removeResignedApp(record.id);
+            setResignedApps(listResignedApps());
+            cleanupResignedAppsAsync().catch(() => {});
+          },
+        },
+      ]
+    );
+  };
+
+  const toggleRecordAutoRenew = (record: ResignedAppRecord, value: boolean) => {
+    updateResignedApp(record.id, { autoRenew: value });
+    setResignedApps(listResignedApps());
+  };
+
+  const toggleAutoRenewResignedApps = (value: boolean) => {
+    setUserPreferences((prev) => {
+      const newPreferences = { ...prev, autoRenewResignedApps: value };
+      saveUserPreferences(newPreferences);
+      return newPreferences;
+    });
+  };
   const [trustedSourcesEnabled, setTrustedSourcesEnabled] = useState(false);
   const [trustedSources, setTrustedSources] = useState<string>('');
   const [automaticallyChecksForUpdates, setAutomaticallyChecksForUpdates] = useState(false);
@@ -259,6 +344,132 @@ const Settings = () => {
               )}
             </Row>
           </View>
+          <View mb="3">
+            <Text size="medium" weight="semibold" style={[headerStyle, styles.headerSpacing]}>
+              Apple ID
+            </Text>
+            <View
+              mt="1.5"
+              rounded="medium"
+              style={groupWrapperStyle}
+              border="light"
+              px="2.5"
+              pt="1"
+              pb="2">
+              {appleAccountId ? (
+                <Row align="center" mt="1" gap="2">
+                  <View flex="1">
+                    <Text weight="medium" numberOfLines={1}>
+                      {appleAccountId}
+                    </Text>
+                    <Text size="tiny" color="secondary">
+                      Used to re-sign builds for your iPhone
+                    </Text>
+                  </View>
+                  <Button
+                    title="Manage App IDs"
+                    onPress={() => WindowsNavigator.open('AppleAppIds')}
+                    style={styles.button}
+                  />
+                  <Button title="Sign Out" onPress={signOutAppleId} style={styles.button} />
+                </Row>
+              ) : (
+                <Row mt="1">
+                  <Text size="tiny" color="secondary" style={styles.captionText}>
+                    Orbit asks for your Apple ID when it re-signs a build for your iPhone.
+                  </Text>
+                </Row>
+              )}
+              <Row mt="1.5">
+                <Text size="tiny" color="secondary" style={styles.captionText}>
+                  Your Apple ID is used only to create a free signing certificate for your devices.
+                  The password is never stored — it is passed once to a local signing process.
+                  Session tokens stay on this computer in ~/.orbit/apple-resign.
+                </Text>
+              </Row>
+            </View>
+          </View>
+          {resignedApps.length > 0 ? (
+            <View mb="3">
+              <Text size="medium" weight="semibold" style={[headerStyle, styles.headerSpacing]}>
+                Resigned apps
+              </Text>
+              <Text size="tiny" color="secondary" style={[styles.headerSpacing, styles.subheader]}>
+                Apps signed with a free Apple ID stop opening after 7 days
+              </Text>
+              <View
+                mt="2"
+                rounded="medium"
+                style={groupWrapperStyle}
+                border="light"
+                px="2.5"
+                pt="1"
+                pb="1">
+                <Row align="center" style={styles.preferencesRow}>
+                  <Checkbox
+                    value={userPreferences.autoRenewResignedApps}
+                    onValueChange={toggleAutoRenewResignedApps}
+                    label="Automatically renew resigned apps"
+                  />
+                </Row>
+                <Divider />
+                {resignedApps.map((record, index) => {
+                  const expiry = formatProfileExpiry(record.profileExpiresAt);
+                  const status = record.lastError
+                    ? record.lastError.message
+                    : record.pendingInstall
+                      ? 'Renewed — installs when the device reconnects'
+                      : null;
+                  return (
+                    <Fragment key={record.id}>
+                      <Row align="center" gap="2" style={styles.resignedAppRow}>
+                        <View flex="1">
+                          <Text size="small" weight="medium" numberOfLines={1}>
+                            {record.appName}
+                          </Text>
+                          <Row gap="1">
+                            <Text size="tiny" color="secondary" numberOfLines={1}>
+                              {record.deviceName} ·
+                            </Text>
+                            <Text
+                              size="tiny"
+                              color={expiry.critical ? 'error' : 'secondary'}
+                              numberOfLines={1}>
+                              {expiry.label}
+                            </Text>
+                          </Row>
+                          {status ? (
+                            <Text
+                              size="tiny"
+                              color={record.lastError ? 'error' : 'secondary'}
+                              numberOfLines={2}>
+                              {status}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <Checkbox
+                          value={record.autoRenew}
+                          onValueChange={(value) => toggleRecordAutoRenew(record, value)}
+                          label="Auto-renew"
+                        />
+                        <Button
+                          title="Renew now"
+                          onPress={() => renewRecordNow(record)}
+                          style={styles.button}
+                        />
+                        <Button
+                          title="Remove"
+                          onPress={() => removeRecord(record)}
+                          style={styles.button}
+                        />
+                      </Row>
+                      {index < resignedApps.length - 1 ? <Divider /> : null}
+                    </Fragment>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
           <Text size="medium" weight="semibold" style={[headerStyle, styles.headerSpacing]}>
             Preferences
           </Text>
@@ -426,6 +637,14 @@ const styles = StyleSheet.create({
   },
   osRow: {
     minHeight: 36,
+  },
+  resignedAppRow: {
+    minHeight: 48,
+    paddingVertical: 6,
+  },
+  captionText: {
+    flex: 1,
+    lineHeight: 15,
   },
   disabledRow: {
     opacity: 0.5,

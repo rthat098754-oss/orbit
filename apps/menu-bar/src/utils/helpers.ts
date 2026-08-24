@@ -38,6 +38,86 @@ export enum MenuBarStatus {
   OPENING_PROJECT_IN_EXPO_GO,
   OPENING_UPDATE,
   WARNING,
+  RESIGNING_APP,
+}
+
+// Maps a resign progress step (emitted by the `resign-ipa` CLI command) to a
+// user-facing message shown on the resign task in the popover.
+export function describeResignStep(step: string): string {
+  switch (step) {
+    case 'waiting-for-auth':
+      return 'Waiting for Apple ID sign-in…';
+    case 'waiting-for-cleanup':
+      return 'Waiting for App ID cleanup…';
+    case 'inspecting':
+      return 'Inspecting app…';
+    case 'authenticating':
+      return 'Signing in to Apple…';
+    case 'registering-device':
+      return 'Registering device…';
+    case 'minting-certificate':
+      return 'Creating signing certificate…';
+    case 'creating-app-id':
+      return 'Registering App ID…';
+    case 'downloading-profile':
+      return 'Downloading provisioning profile…';
+    case 'codesigning':
+      return 'Code signing…';
+    case 'repacking':
+      return 'Repacking app…';
+    case 'done':
+      return 'Finishing up…';
+    default:
+      return 'Re-signing app…';
+  }
+}
+
+// Progress percentage for each resign step, so the task row can show a
+// determinate bar. Orbit-side waiting steps return undefined (indeterminate).
+export function resignStepProgress(step: string): number | undefined {
+  switch (step) {
+    case 'inspecting':
+      return 5;
+    case 'authenticating':
+      return 15;
+    case 'registering-device':
+      return 30;
+    case 'minting-certificate':
+      return 40;
+    case 'creating-app-id':
+      return 55;
+    case 'downloading-profile':
+      return 65;
+    case 'codesigning':
+      return 75;
+    case 'repacking':
+      return 94;
+    case 'done':
+      return 100;
+    default:
+      return undefined;
+  }
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+// Human label for a provisioning-profile expiry. `critical` marks records the
+// UI should paint red (< 48 h left, matching the renewal-due window).
+export function formatProfileExpiry(
+  profileExpiresAt: string,
+  now: number = Date.now()
+): { label: string; critical: boolean } {
+  const expiresAt = Date.parse(profileExpiresAt);
+  if (Number.isNaN(expiresAt)) return { label: 'Unknown expiry', critical: true };
+  const remaining = expiresAt - now;
+  if (remaining <= 0) return { label: 'Expired', critical: true };
+  const days = Math.floor(remaining / DAY_MS);
+  const hours = Math.floor((remaining % DAY_MS) / HOUR_MS);
+  return {
+    label: days > 0 ? `Expires in ${days}d ${hours}h` : `Expires in ${hours}h`,
+    critical: remaining < 48 * HOUR_MS,
+  };
 }
 
 export function extractDownloadProgress(string: string) {

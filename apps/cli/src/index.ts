@@ -47,7 +47,10 @@ program
   .description('Pair a physical Android device over Wi-Fi')
   .requiredOption('--mode  <string>', 'Pairing mode: "code" (manual address) or "qr" (scanned)')
   .option('--pairing-code  <string>', '"code" mode: pairing code shown on the device')
-  .option('--pairing-address  <string>', '"code" mode: IP address and port shown on the pairing dialog')
+  .option(
+    '--pairing-address  <string>',
+    '"code" mode: IP address and port shown on the pairing dialog'
+  )
   .option(
     '--connect-address  <string>',
     '"code" mode: IP address and port used to connect to the device after pairing'
@@ -142,6 +145,68 @@ program
   .command('set-custom-trusted-sources')
   .argument('<string>', 'Trusted sources')
   .action(returnLoggerMiddleware(setCustomTrustedSourcesAsync));
+
+program
+  .command('apple-id-auth')
+  .description('Sign in / verify 2FA / sign out for the Apple ID used by IPA resigning')
+  .requiredOption('--mode <string>', 'sign-in | verify-2fa | sign-out')
+  .requiredOption('--apple-id <string>', 'Apple ID email')
+  .option('--code <string>', '2FA code (when --mode verify-2fa)')
+  .option('--prefer-sms', 'Send the 2FA code by SMS instead of a trusted-device push')
+  .action(async (...args) => {
+    const { appleIdAuthAsync } = await import('./commands/AppleIdAuth');
+    return returnLoggerMiddleware(appleIdAuthAsync)(...args);
+  });
+
+program
+  .command('resign-ipa')
+  .description('Resign an IPA with a free Apple ID-issued certificate for the given device')
+  .requiredOption('--ipa <string>', 'Path to the input IPA')
+  .requiredOption('--udid <string>', 'UDID of the target physical iPhone / iPad')
+  .requiredOption('--device-name <string>', 'Friendly name for the device (used in Apple portal)')
+  .requiredOption('--apple-id <string>', 'Apple ID that owns the signing identity')
+  .option('--output <string>', 'Path to the resigned IPA (default: alongside the input)')
+  .option(
+    '--strip-extensions',
+    'Remove PlugIns/*.appex and Watch/* before signing (free-account App ID limit)'
+  )
+  .option(
+    '--managed-dir <string>',
+    'Managed resigned-apps dir; keeps a copy of the original ipa and the resigned output there for 7-day renewals'
+  )
+  .action(async (...args) => {
+    const { resignIpaCommandAsync } = await import('./commands/ResignIpa');
+    return returnLoggerMiddleware(resignIpaCommandAsync)(...args);
+  });
+
+program
+  .command('cleanup-resigned-apps')
+  .description('Delete managed resigned-app directories that no longer back a record')
+  .requiredOption('--dir <string>', 'The managed resigned-apps directory')
+  .requiredOption('--keep <string>', 'JSON array of record directory names to keep')
+  .action(async (...args) => {
+    const { cleanupResignedAppsAsync } = await import('./commands/CleanupResignedApps');
+    return returnLoggerMiddleware(cleanupResignedAppsAsync)(...args);
+  });
+
+program
+  .command('list-app-ids')
+  .description('List the App IDs registered to the Apple ID (free accounts cap at 10 per 7 days)')
+  .requiredOption('--apple-id <string>', 'Apple ID email')
+  .action(async (...args) => {
+    const { listAppIdsAsync } = await import('./commands/AppleAppIds');
+    return returnLoggerMiddleware(listAppIdsAsync)(...args);
+  });
+
+program
+  .command('delete-app-id')
+  .description('Delete an App ID by its portal id (from list-app-ids) to free a slot')
+  .requiredOption('--apple-id <string>', 'Apple ID email')
+  .requiredOption('--app-id-id <string>', 'Portal App ID id (the appIdId from list-app-ids)')
+  .action(async (...args) => {
+    const { deleteAppIdAsync } = await import('./commands/AppleAppIds');
+    return returnLoggerMiddleware(deleteAppIdAsync)(...args);
+  });
 
 if (process.argv.length < 3) {
   program.help();

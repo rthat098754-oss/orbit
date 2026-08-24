@@ -10,6 +10,7 @@ import DeviceListSectionHeader from './DeviceListSectionHeader';
 import DevicesListError from './DevicesListError';
 import { FOOTER_HEIGHT } from './Footer';
 import ProjectsSection, { getProjectSectionHeight } from './ProjectsSection';
+import ResignedAppsAttentionRow, { ATTENTION_ROW_HEIGHT } from './ResignedAppsAttentionRow';
 import { SECTION_HEADER_HEIGHT } from './SectionHeader';
 import { useFileHandler } from '../../modules/file-handler';
 import { Analytics, Event } from '../analytics';
@@ -20,12 +21,14 @@ import { downloadBuildAsync } from '../commands/downloadBuildAsync';
 import { installAndLaunchAppAsync } from '../commands/installAndLaunchAppAsync';
 import { launchExpoGoAsync } from '../commands/launchExpoGoAsync';
 import { launchUpdateAsync } from '../commands/launchUpdateAsync';
+import { resignAndRetryAsync } from '../commands/resignAndRetryAsync';
 import { Spacer, View } from '../components';
 import DeviceItem, { DEVICE_ITEM_HEIGHT } from '../components/DeviceItem';
 import { useDeepLinking } from '../hooks/useDeepLinking';
 import { useDeviceAudioPreferences } from '../hooks/useDeviceAudioPreferences';
 import { useGetPinnedApps } from '../hooks/useGetPinnedApps';
 import { usePopoverFocusEffect } from '../hooks/usePopoverFocus';
+import { useResignedAppRenewals } from '../hooks/useResignedAppRenewals';
 import { useSafeDisplayDimensions } from '../hooks/useSafeDisplayDimensions';
 import Alert from '../modules/Alert';
 import MenuBarModule from '../modules/MenuBarModule';
@@ -45,13 +48,14 @@ import {
   getDeviceOS,
   isVirtualDevice,
 } from '../utils/device';
-import { MenuBarStatus, Task } from '../utils/helpers';
+import { MenuBarStatus, Task, describeResignStep, resignStepProgress } from '../utils/helpers';
 import {
   URLType,
   getPlatformFromURI,
   handleAuthUrl,
   identifyAndParseDeeplinkURL,
 } from '../utils/parseUrl';
+import { describeResignError } from '../utils/resignErrorCopy';
 import { WindowsNavigator } from '../windows';
 
 type Props = {
@@ -118,6 +122,8 @@ function Core(props: Props) {
   );
   const { emulatorWithoutAudio } = useDeviceAudioPreferences();
 
+  const { attention } = useResignedAppRenewals({ createTask, updateTask, deleteTask });
+
   // TODO: Extract into a hook
   const displayDimensions = useSafeDisplayDimensions();
   const estimatedAvailableSizeForDevices =
@@ -125,6 +131,7 @@ function Core(props: Props) {
     FOOTER_HEIGHT -
     BUILDS_SECTION_HEIGHT -
     getProjectSectionHeight(apps?.length) -
+    (attention ? ATTENTION_ROW_HEIGHT : 0) -
     5;
   const heightOfAllDevices =
     DEVICE_ITEM_HEIGHT * numberOfDevices + SECTION_HEADER_HEIGHT * (sections?.length || 0);
@@ -578,10 +585,104 @@ function Core(props: Props) {
                 'We were unable to launch your app because the device is currently locked.'
               );
             } else if (error.code === 'APPLE_APP_VERIFICATION_FAILED') {
-              Alert.alert(
-                error.message,
-                'Confirm that this is an internal distribution build and that your device was provisioned to use this build.'
-              );
+              if (getDeviceOS(device) !== 'ios' || isVirtualDevice(device)) {
+                Alert.alert(
+                  error.message,
+                  'Confirm that this is an internal distribution build and that your device was provisioned to use this build.'
+                );
+              } else {
+                const deviceName = device.name ?? 'iPhone';
+                const ipaPath = localFilePath!;
+                const runResign = async () => {
+                  MenuBarModule.openPopover();
+                  const resignTaskId = `resign:${ipaPath}`;
+                  // Progress is stitched: fixed percentages per step, plus a
+                  // slow creep during the opaque codesigning phase so the bar
+                  // never looks frozen. Kept monotonic across step repeats.
+                  let lastProgress = 0;
+                  let creepTimer: ReturnType<typeof setInterval> | undefined;
+                  const clearCreep = () => {
+                    if (creepTimer) {
+                      clearInterval(creepTimer);
+                      creepTimer = undefined;
+                    }
+                  };
+                  createTask({
+                    id: resignTaskId,
+                    status: MenuBarStatus.RESIGNING_APP,
+                    progress: 0,
+                    message: describeResignStep('inspecting'),
+                  });
+                  try {
+                    await resignAndRetryAsync({
+                      localFilePath: ipaPath,
+                      deviceId: resolvedDeviceId,
+                      deviceName,
+                      launchURL,
+                      sourceUri: appURI.startsWith('https://') ? appURI : undefined,
+                      onProgress: (step) => {
+                        clearCreep();
+                        const target = resignStepProgress(step);
+                        if (target === undefined) {
+                          // Orbit-side waiting steps: back to indeterminate.
+                          lastProgress = 0;
+                        } else {
+                          lastProgress = Math.max(lastProgress, target);
+                        }
+                        updateTask({
+                          id: resignTaskId,
+                          status: MenuBarStatus.RESIGNING_APP,
+                          progress: lastProgress,
+                          message: describeResignStep(step),
+                        });
+                        if (step === 'codesigning') {
+                          creepTimer = setInterval(() => {
+                            if (lastProgress < 92) {
+                              lastProgress += 1;
+                              updateTask({ id: resignTaskId, progress: lastProgress });
+                            }
+                          }, 250);
+                        }
+                      },
+                    });
+                  } catch (resignError) {
+                    if (
+                      resignError instanceof InternalError &&
+                      resignError.code === 'APPLE_DEVICE_LOCKED'
+                    ) {
+                      Alert.alert(
+                        'Unlock your device and try again',
+                        'Your iPhone needs to be unlocked so the developer ' +
+                          'tooling can mount and install the resigned app.',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Retry',
+                            style: 'default',
+                            onPress: () => {
+                              runResign();
+                            },
+                          },
+                        ]
+                      );
+                    } else {
+                      const { title, message } = describeResignError(resignError);
+                      Alert.alert(title, message);
+                    }
+                  } finally {
+                    clearCreep();
+                    deleteTask(resignTaskId);
+                  }
+                };
+                Alert.alert(
+                  "This build isn't signed for your device",
+                  'Orbit can resign it with your Apple ID and retry.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Resign and install', style: 'default', onPress: runResign },
+                  ]
+                );
+              }
             }
           } else {
             throw error;
@@ -706,6 +807,7 @@ function Core(props: Props) {
     <View shrink="1" testID="popover-core">
       <BuildsSection installAppFromURI={installAppFromURI} tasks={tasks} />
       <ProjectsSection apps={apps} />
+      {attention ? <ResignedAppsAttentionRow attention={attention} /> : null}
       <View shrink="1" pt="tiny" overflow="hidden">
         {devicesError ? (
           <DevicesListError error={devicesError} />
