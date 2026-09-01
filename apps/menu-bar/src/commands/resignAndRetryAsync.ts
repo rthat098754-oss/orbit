@@ -1,6 +1,6 @@
 import { AppleResignUnsupportedIpaErrorDetails, InternalError } from 'common-types';
 
-import { AUTH_REASON_KEY, loadAppleId } from './appleAccountAsync';
+import { AUTH_REASON_KEY, forgetAppleIdSession, loadAppleId } from './appleAccountAsync';
 import { installAndLaunchAppAsync } from './installAndLaunchAppAsync';
 import Alert from '../modules/Alert';
 import MenuBarModule from '../modules/MenuBarModule';
@@ -19,7 +19,8 @@ import {
   AppleAppIdsDoneEvent,
   AppleAppIdsEmitter,
 } from '../utils/appleAppIdsEvents';
-import { AppleAuthCompletedEvent, AppleAuthEmitter } from '../utils/appleAuthEvents';
+import { AppleAuthCompletedEvent, waitForAppleAuthCompleteAsync } from '../utils/appleAuthEvents';
+import { parseCliJsonResult } from '../utils/helpers';
 import { describeResignError } from '../utils/resignErrorCopy';
 import { WindowsNavigator } from '../windows';
 
@@ -66,19 +67,7 @@ export async function runResignCliAsync(opts: {
       opts.onProgress?.(match[1], match[2]);
     }
   });
-  return JSON.parse(result) as ResignCliResult;
-}
-
-function waitForAuthAsync(): Promise<AppleAuthCompletedEvent> {
-  return new Promise((resolve) => {
-    const sub = AppleAuthEmitter.addListener(
-      'apple-id-auth:complete',
-      (event: AppleAuthCompletedEvent) => {
-        sub.remove();
-        resolve(event);
-      }
-    );
-  });
+  return parseCliJsonResult<ResignCliResult>(result, 'resign-ipa');
 }
 
 /**
@@ -90,7 +79,7 @@ export function ensureAppleAuthAsync(reason?: 'session-expired'): Promise<AppleA
     storage.set(AUTH_REASON_KEY, reason);
   }
   WindowsNavigator.open('AppleIdAuth');
-  return waitForAuthAsync();
+  return waitForAppleAuthCompleteAsync();
 }
 
 function waitForAppIdCleanupAsync(): Promise<AppleAppIdsDoneEvent> {
@@ -261,6 +250,7 @@ export async function resignAndRetryAsync(opts: {
     } catch (error) {
       const code = error instanceof InternalError ? error.code : undefined;
       if (code === 'APPLE_AUTH_REQUIRED' && authPrompts < MAX_AUTH_PROMPTS) {
+        forgetAppleIdSession(); // expired session is a logout — reflect it everywhere
         appleId = null; // force the auth window on the next pass
         authReason = 'session-expired';
         continue;

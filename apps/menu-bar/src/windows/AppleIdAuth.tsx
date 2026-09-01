@@ -4,7 +4,7 @@ import React, { useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, TouchableOpacity } from 'react-native';
 
 import { WindowsNavigator } from './index';
-import { AUTH_REASON_KEY, loadAppleId, rememberAppleId } from '../commands/appleAccountAsync';
+import { AUTH_REASON_KEY, loadAppleIdHint, rememberAppleId } from '../commands/appleAccountAsync';
 import { appleIdSignInAsync, appleIdVerifyTwoFactorAsync } from '../commands/appleIdAuthAsync';
 import { TextInput, Text, View, Row, Divider } from '../components';
 import Button from '../components/Button';
@@ -25,7 +25,7 @@ const AppleIdAuth: React.FC = () => {
   const themeName = useCurrentTheme();
   const theme = themeName === 'dark' ? darkTheme : lightTheme;
   const [stage, setStage] = useState<Stage>('credentials');
-  const [appleId, setAppleId] = useState(() => loadAppleId() ?? '');
+  const [appleId, setAppleId] = useState(() => loadAppleIdHint() ?? '');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [preferSms, setPreferSms] = useState(false);

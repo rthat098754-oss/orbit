@@ -54,7 +54,10 @@ const config: ForgeConfig = {
     // `yarn build:helpers`. Ship them as resources (copied to `<resources>/bin`,
     // outside the asar) so they stay directly executable; the bundled CLI is
     // pointed there via ORBIT_HELPER_BIN_DIR (see src/main.ts).
-    extraResource: ['./assets', './bin'],
+    // `./anisette` holds the anisette-js WASM assets (Win/Linux anisette), also
+    // populated by `yarn build:helpers`; the CLI reads them via
+    // ORBIT_ANISETTE_ASSETS_DIR (see src/main.ts).
+    extraResource: ['./assets', './bin', './anisette'],
     // `wdio-electron-service` has to live in `dependencies` (not devDeps) so
     // electron-packager keeps it in the asar's node_modules — the runtime
     // require in src/main.ts needs it. But it's a test-only dep; strip it

@@ -3,7 +3,12 @@ import React, { Fragment, useCallback, useEffect, useRef, useState } from 'react
 import { ActivityIndicator, ScrollView, StyleSheet } from 'react-native';
 
 import { WindowsNavigator } from './index';
-import { loadAppleId } from '../commands/appleAccountAsync';
+import {
+  AUTH_REASON_KEY,
+  forgetAppleIdSession,
+  isAppleAuthExpiredError,
+  loadAppleId,
+} from '../commands/appleAccountAsync';
 import {
   AppleAppId,
   deleteAppleAppIdAsync,
@@ -12,7 +17,9 @@ import {
 import { Divider, Row, Text, View } from '../components';
 import Button from '../components/Button';
 import Alert from '../modules/Alert';
+import { storage } from '../modules/Storage';
 import { APPLE_APP_IDS_DONE_EVENT, AppleAppIdsEmitter } from '../utils/appleAppIdsEvents';
+import { waitForAppleAuthCompleteAsync } from '../utils/appleAuthEvents';
 import { describeResignError } from '../utils/resignErrorCopy';
 import { useCurrentTheme } from '../utils/useExpoTheme';
 
@@ -25,12 +32,15 @@ import { useCurrentTheme } from '../utils/useExpoTheme';
 const AppleAppIds: React.FC = () => {
   const themeName = useCurrentTheme();
   const theme = themeName === 'dark' ? darkTheme : lightTheme;
-  const appleId = loadAppleId();
+  const [appleId, setAppleId] = useState<string | null>(() => loadAppleId());
   const [appIds, setAppIds] = useState<AppleAppId[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const deletedCountRef = useRef(0);
   const doneEmittedRef = useRef(false);
+  // Re-auth the expired session at most once per load, so a persistent failure
+  // can't bounce the sign-in window in a loop.
+  const reauthTriedRef = useRef(false);
 
   const emitDone = useCallback(() => {
     if (doneEmittedRef.current) return;
@@ -44,21 +54,49 @@ const AppleAppIds: React.FC = () => {
   // flow waiting on the event never hangs.
   useEffect(() => emitDone, [emitDone]);
 
+  const promptReauthAsync = useCallback(async (): Promise<boolean> => {
+    storage.set(AUTH_REASON_KEY, 'session-expired');
+    WindowsNavigator.open('AppleIdAuth');
+    const event = await waitForAppleAuthCompleteAsync();
+    return event.status === 'success';
+  }, []);
+
   const load = useCallback(async () => {
-    if (!appleId) {
-      setError('No Apple ID is signed in.');
+    const id = loadAppleId();
+    setAppleId(id);
+    if (!id) {
+      setAppIds([]);
+      setError('Sign in with your Apple ID to manage App IDs.');
       return;
     }
     setError(null);
+    setAppIds(null);
     try {
-      const rows = await listAppleAppIdsAsync(appleId);
+      const rows = await listAppleAppIdsAsync(id);
       rows.sort((a, b) => (a.expirationDate ?? '').localeCompare(b.expirationDate ?? ''));
       setAppIds(rows);
+      reauthTriedRef.current = false;
     } catch (e) {
+      // An expired session is a logout: forget it (every "signed in as" surface
+      // updates), then re-sign-in once and retry automatically.
+      if (isAppleAuthExpiredError(e)) {
+        forgetAppleIdSession();
+        setAppleId(null);
+        if (!reauthTriedRef.current) {
+          reauthTriedRef.current = true;
+          if (await promptReauthAsync()) {
+            await load();
+            return;
+          }
+        }
+        setAppIds([]);
+        setError('Your Apple ID session expired. Sign in again to manage App IDs.');
+        return;
+      }
       setError(describeResignError(e).message);
       setAppIds([]);
     }
-  }, [appleId]);
+  }, [promptReauthAsync]);
 
   useEffect(() => {
     load();
@@ -74,12 +112,20 @@ const AppleAppIds: React.FC = () => {
           text: 'Delete',
           style: 'default',
           onPress: async () => {
+            if (!appleId) return;
             setBusyId(row.appIdId);
             try {
-              await deleteAppleAppIdAsync(appleId!, row.appIdId);
+              await deleteAppleAppIdAsync(appleId, row.appIdId);
               deletedCountRef.current += 1;
               await load();
             } catch (e) {
+              if (isAppleAuthExpiredError(e)) {
+                // Session died mid-session: log out and let load() re-auth.
+                forgetAppleIdSession();
+                reauthTriedRef.current = false;
+                await load();
+                return;
+              }
               setError(describeResignError(e).message);
             } finally {
               setBusyId(null);

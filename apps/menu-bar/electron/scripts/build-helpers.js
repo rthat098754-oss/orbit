@@ -18,12 +18,12 @@
 // 0, so `yarn start` is never blocked.
 //
 // Host build prerequisites:
-//   Linux:   rustup + cargo-zigbuild (`pip install ziglang`); `git`, `g++`,
-//            `make`, `pkg-config`, `libssl-dev` for zsign.
+//   Linux:   `git`, `g++`, `make`, `pkg-config`, `libssl-dev` for zsign.
 //   macOS:   Xcode toolchain (anisette uses the Swift helper); `git` + clang for zsign.
-//   Windows: rustup with the native MSVC toolchain (anisette builds via cargo).
-//            zsign is reused from a prebuilt binary if present (see
-//            anisette/orbit-anisette-rs/README.md and zsign build/windows/vs2022).
+//   Windows: zsign is reused from a prebuilt binary if present (zsign build/windows/vs2022).
+// Anisette on Windows/Linux needs NO toolchain — it runs the anisette-js WASM
+// emulator, whose assets ship in the ipa-resign package and are copied into
+// electron/anisette/ below.
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -53,14 +53,6 @@ function run(cmd, args, opts = {}) {
     stdio: 'inherit',
     shell: process.platform === 'win32',
     ...opts,
-  });
-  return res.status === 0;
-}
-
-function commandExists(cmd) {
-  const res = spawnSync(cmd, ['--version'], {
-    stdio: 'ignore',
-    shell: process.platform === 'win32',
   });
   return res.status === 0;
 }
@@ -123,20 +115,14 @@ function copyPrebuiltIfPresent(artifact) {
 }
 
 function buildAnisette() {
-  if (platform === 'linux') {
-    const artifact = `anisette-linux-${archLabel}`;
-    if (have(artifact)) return log(`${artifact} already present — skipping (FORCE=1 to rebuild)`);
-    if (copyPrebuiltIfPresent(artifact)) return;
-    if (run('yarn', ['build:helper:rust', `linux-${archLabel}`], { cwd: appleResign })) {
-      copy(path.join(appleResign, 'bin', artifact), path.join(binDir, artifact));
-    } else {
-      warn(
-        `Could not build ${artifact} — install rustup + cargo-zigbuild. Apple ID auth will be unavailable.`
-      );
-    }
-    return;
-  }
+  // Windows/Linux (and macOS with ORBIT_ANISETTE_FORCE_WASM) run the anisette-js
+  // WASM emulator — copy its assets from the ipa-resign package into
+  // electron/anisette/ so they ship (extraResource) and the bundled CLI can load
+  // them via ORBIT_ANISETTE_ASSETS_DIR (see src/main.ts).
+  copyAnisetteWasmAssets();
+
   if (platform === 'darwin') {
+    // macOS default provider: the native Swift helper.
     const artifact = 'anisette';
     if (have(artifact)) return log(`${artifact} already present — skipping (FORCE=1 to rebuild)`);
     if (copyPrebuiltIfPresent(artifact)) return;
@@ -149,37 +135,28 @@ function buildAnisette() {
     }
     return;
   }
-  if (platform === 'win32') {
-    const artifact = `anisette-win-${archLabel}.exe`;
-    if (have(artifact)) return log(`${artifact} already present — skipping (FORCE=1 to rebuild)`);
-    const rustDir = path.join(appleResign, 'anisette', 'orbit-anisette-rs');
-    const built = path.join(rustDir, 'target', 'release', 'orbit-anisette.exe');
-    const prebuilt = path.join(appleResign, 'bin', artifact);
-    if (commandExists('cargo')) {
-      log(`Building anisette helper (${artifact}) — native cargo build`);
-      if (run('cargo', ['build', '--release'], { cwd: rustDir }) && fs.existsSync(built)) {
-        copy(built, path.join(binDir, artifact));
-      } else {
-        warn(
-          'cargo build failed — see anisette/orbit-anisette-rs/README.md. Apple ID auth will be unavailable.'
-        );
-      }
-    } else if (fs.existsSync(prebuilt)) {
-      log(`cargo not found — copying prebuilt ${artifact} from apple-resign/bin`);
-      copy(prebuilt, path.join(binDir, artifact));
-    } else {
-      warn(
-        `Cannot provide ${artifact}: rustup/cargo isn't installed and no prebuilt binary exists in apple-resign/bin.`
-      );
-      warn(
-        "Install Rust (https://rustup.rs), then re-run 'yarn build:helpers'. See anisette/orbit-anisette-rs/README.md."
-      );
-    }
+  // Windows / Linux: no native anisette binary — the WASM assets copied above are
+  // the provider.
+}
+
+// Copy the anisette-js WASM assets (assets/anisette/) from the resolved
+// ipa-resign package into electron/anisette/. Shipped via extraResource so the
+// packaged app has them; the CLI reads them through ORBIT_ANISETTE_ASSETS_DIR.
+function copyAnisetteWasmAssets() {
+  const src = path.join(appleResign, 'assets', 'anisette');
+  const dest = path.join(electronDir, 'anisette');
+  if (!fs.existsSync(src)) {
+    warn(
+      `anisette WASM assets not found at ${src} — run 'yarn build:anisette' in apple-resign (or reinstall). Apple ID auth on Windows/Linux will be unavailable.`
+    );
     return;
   }
-  warn(
-    `Unsupported platform '${platform}' for anisette — build the helper manually (see script header).`
-  );
+  if (!FORCE && fs.existsSync(path.join(dest, 'anisette_rs.wasm'))) {
+    return log('anisette WASM assets already present — skipping (FORCE=1 to refresh)');
+  }
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.cpSync(src, dest, { recursive: true });
+  log(`-> ${dest} (anisette WASM assets)`);
 }
 
 function buildZsign() {

@@ -72,6 +72,21 @@ export function describeResignStep(step: string): string {
   }
 }
 
+// Parse a CLI command's JSON result. When the CLI process dies before printing
+// its `---- return output ----` JSON (e.g. a crash while loading a native
+// module), the raw output reaches JSON.parse and the user used to see
+// "JSON Parse error: Unexpected character: U". Turn that into a real message.
+export function parseCliJsonResult<T>(result: string, command: string): T {
+  try {
+    return JSON.parse(result) as T;
+  } catch {
+    throw new InternalError(
+      'APPLE_RESIGN_FAILED',
+      `Orbit's CLI returned an unexpected response for ${command}. Open the Debug Menu logs for details.`
+    );
+  }
+}
+
 // Progress percentage for each resign step, so the task row can show a
 // determinate bar. Orbit-side waiting steps return undefined (indeterminate).
 export function resignStepProgress(step: string): number | undefined {

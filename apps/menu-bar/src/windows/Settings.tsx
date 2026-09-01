@@ -12,7 +12,11 @@ import {
   WebBrowserResultType,
 } from '../../modules/web-authentication-session';
 import { withApolloProvider } from '../api/ApolloClient';
-import { clearAppleIdLoginAsync, loadAppleId } from '../commands/appleAccountAsync';
+import {
+  APPLE_ID_CHANGED_EVENT,
+  clearAppleIdLoginAsync,
+  loadAppleId,
+} from '../commands/appleAccountAsync';
 import { cleanupResignedAppsAsync } from '../commands/cleanupResignedAppsAsync';
 import { getTrustedSourcesAsync } from '../commands/getTrustesSourcesAsync';
 import { setTrustedSourcesAsync } from '../commands/setTrustedSourcesAsync';
@@ -43,7 +47,6 @@ import {
   sessionSecretStorageKey,
   resetApolloStore,
 } from '../modules/Storage';
-import { AppleAuthEmitter } from '../utils/appleAuthEvents';
 import { formatProfileExpiry, getCurrentUserDisplayName } from '../utils/helpers';
 import { addOpacity } from '../utils/theme';
 import { useCurrentTheme } from '../utils/useExpoTheme';
@@ -95,18 +98,18 @@ const Settings = () => {
   const [resignedApps, setResignedApps] = useState<ResignedAppRecord[]>(listResignedApps());
 
   useEffect(() => {
-    // Cross-window: record writes and sign-ins can happen in the popover or the
-    // auth window; both broadcast through the main-process DeviceEventEmitter.
+    // Cross-window: record writes and Apple ID changes (sign-in, sign-out, or an
+    // automatic logout on session expiry) can happen in the popover or another
+    // window; both broadcast through the main-process DeviceEventEmitter.
     const recordsSub = DeviceEventEmitter.addListener(RESIGNED_APPS_CHANGED_EVENT, () => {
       setResignedApps(listResignedApps());
-      setAppleAccountId(loadAppleId());
     });
-    const authSub = AppleAuthEmitter.addListener('apple-id-auth:complete', () => {
+    const appleIdSub = DeviceEventEmitter.addListener(APPLE_ID_CHANGED_EVENT, () => {
       setAppleAccountId(loadAppleId());
     });
     return () => {
       recordsSub.remove();
-      authSub.remove();
+      appleIdSub.remove();
     };
   }, []);
 

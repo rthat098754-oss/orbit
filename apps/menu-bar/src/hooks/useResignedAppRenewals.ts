@@ -2,6 +2,7 @@ import { InternalError } from 'common-types';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { usePopoverFocusEffect } from './usePopoverFocus';
+import { forgetAppleIdSession } from '../commands/appleAccountAsync';
 import { cleanupResignedAppsAsync } from '../commands/cleanupResignedAppsAsync';
 import { installAndLaunchAppAsync } from '../commands/installAndLaunchAppAsync';
 import { renewResignedAppAsync } from '../commands/renewResignedAppAsync';
@@ -94,6 +95,9 @@ export function useResignedAppRenewals({ createTask, updateTask, deleteTask }: T
         const code = error instanceof InternalError ? error.code : undefined;
         const at = new Date().toISOString();
         if (code === 'APPLE_AUTH_REQUIRED') {
+          // Expired session is a logout: forget it so every "signed in as X"
+          // surface updates, then surface the attention row to re-sign-in.
+          forgetAppleIdSession();
           updateResignedApp(record.id, {
             lastError: { code, message: 'Apple ID session expired.', at },
           });

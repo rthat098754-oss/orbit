@@ -1,4 +1,5 @@
 import MenuBarModule from '../modules/MenuBarModule';
+import { parseCliJsonResult } from '../utils/helpers';
 
 export type AppleAppId = {
   appIdId: string;
@@ -9,7 +10,7 @@ export type AppleAppId = {
 
 export async function listAppleAppIdsAsync(appleId: string): Promise<AppleAppId[]> {
   const result = await MenuBarModule.runCli('list-app-ids', ['--apple-id', appleId]);
-  return JSON.parse(result) as AppleAppId[];
+  return parseCliJsonResult<AppleAppId[]>(result, 'list-app-ids');
 }
 
 export async function deleteAppleAppIdAsync(appleId: string, appIdId: string): Promise<void> {

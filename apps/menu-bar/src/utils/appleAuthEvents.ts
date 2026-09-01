@@ -11,3 +11,16 @@ export type AppleAuthCompletedEvent =
 export const AppleAuthEmitter = DeviceEventEmitter;
 
 export type AppleAuthEventName = 'apple-id-auth:complete';
+
+/** Resolve once the AppleIdAuth window reports its result. */
+export function waitForAppleAuthCompleteAsync(): Promise<AppleAuthCompletedEvent> {
+  return new Promise((resolve) => {
+    const sub = AppleAuthEmitter.addListener(
+      'apple-id-auth:complete',
+      (event: AppleAuthCompletedEvent) => {
+        sub.remove();
+        resolve(event);
+      }
+    );
+  });
+}

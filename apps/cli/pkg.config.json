@@ -4,7 +4,6 @@
       "../../node_modules/macos-export-certificate-and-key/**/*.node",
       "../../node_modules/ipa-resign/node_modules/macos-export-certificate-and-key/**/*.node",
       "../../node_modules/ipa-resign/bin/anisette",
-      "../../node_modules/ipa-resign/bin/anisette-*",
       "../../node_modules/ipa-resign/bin/zsign",
       "../../node_modules/ipa-resign/bin/zsign-*"
     ],
